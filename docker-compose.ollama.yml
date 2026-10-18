@@ -1,0 +1,56 @@
+# Optional Ollama-in-Docker layer. Enable with:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.ollama.yml up
+#
+# Pairs with the base file; do not use on its own. The `make up-all` target in
+# the Makefile wraps this.
+
+services:
+  # Repoint the API at the containerised daemon. This is the whole reason this is
+  # an override file rather than a compose profile: a profile can add services
+  # but cannot change another service's environment, so `--profile` alone would
+  # start Ollama in a container and leave the API talking to the host.
+  api:
+    environment:
+      OLLAMA_BASE_URL: http://ollama:11434
+    depends_on:
+      ollama-pull:
+        # Hold the API back until both models are present. First run therefore
+        # blocks on a multi-GB download -- the pull logs stream to the same
+        # console, so it looks slow rather than hung, and the alternative is
+        # every early query failing with model_not_found.
+        condition: service_completed_successfully
+
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      # Persist pulled models -- otherwise every `down` throws away several GB.
+      - ollama-models:/root/.ollama
+    restart: unless-stopped
+    # Uncomment for NVIDIA GPU passthrough.
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+  # One-shot model pull so the stack is usable on first boot. Without this the
+  # API starts fine but every query fails with model_not_found.
+  ollama-pull:
+    image: ollama/ollama:latest
+    depends_on:
+      - ollama
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    entrypoint: ["/bin/sh", "-c"]
+    command: >
+      "ollama pull ${LLM_MODEL:-llama3.1} &&
+       ollama pull ${EMBEDDING_MODEL:-nomic-embed-text}"
+    restart: "no"
+
+volumes:
+  ollama-models:

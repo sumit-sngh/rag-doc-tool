@@ -1,0 +1,26 @@
+# ---- Web framework -------------------------------------------------------
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-multipart==0.0.20        # multipart/form-data for file uploads
+pydantic==2.10.5
+pydantic-settings==2.7.1        # env-based config
+
+# ---- HTTP client (Ollama, and any future remote provider) ----------------
+httpx==0.28.1
+
+# ---- Storage -------------------------------------------------------------
+aiosqlite==0.20.0               # async SQLite for metadata
+chromadb==0.6.3                 # embedded persistent vector store
+
+# ---- Document text extraction -------------------------------------------
+pypdf==5.1.0                    # PDF text + page structure
+python-docx==1.1.2              # DOCX paragraphs and tables
+charset-normalizer==3.4.1       # encoding detection for .txt / .md
+
+# ---- Utilities -----------------------------------------------------------
+anyio==4.8.0                    # to_thread offloading for sync libraries
+tenacity==9.0.0                 # retry/backoff around provider calls
+
+# ---- Tests ---------------------------------------------------------------
+pytest==8.3.4
+pytest-asyncio==0.25.2

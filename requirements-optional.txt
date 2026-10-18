@@ -1,0 +1,21 @@
+# Optional extras. Install only if you want the corresponding feature.
+#   pip install -r requirements-optional.txt
+
+# --- OCR for image-based / scanned PDFs (set OCR_ENABLED=true) ------------
+# Also needs system binaries:
+#   Debian/Ubuntu: sudo apt-get install tesseract-ocr poppler-utils
+#   macOS:         brew install tesseract poppler
+pytesseract==0.3.13
+pdf2image==1.17.0
+Pillow==11.1.0
+
+# --- Cross-encoder reranking (set RERANK_STRATEGY=cross_encoder) ---------
+# Heavy (pulls torch, ~2GB). The default MMR reranker needs none of this.
+sentence-transformers==3.3.1
+
+# --- Test fixtures --------------------------------------------------------
+# Builds the PDFs that tests/test_extractors.py and tests/test_api.py feed
+# through the extractor. Without it those tests skip; the rest still run, but
+# then nothing checks PDF page-number attribution -- which is what citations
+# point at. Worth installing before trusting a green suite.
+reportlab==4.2.5

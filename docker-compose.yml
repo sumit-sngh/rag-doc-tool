@@ -1,0 +1,37 @@
+# API only. Ollama is expected on the host -- the right default on a laptop,
+# because a containerised Ollama gets no GPU access without extra setup and CPU
+# inference of llama3.1 is slow enough to feel broken.
+#
+#   docker compose up
+#
+# To containerise Ollama too, layer the override on top (see docker-compose.ollama.yml
+# or just run `make up-all`):
+#
+#   docker compose -f docker-compose.yml -f docker-compose.ollama.yml up
+
+services:
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file:
+      # Optional. Compose warns if it is missing, so either `cp .env.example .env`
+      # or delete these two lines.
+      - path: .env
+        required: false
+    environment:
+      # Set here rather than in .env because `environment` outranks `env_file`:
+      # .env.example ships OLLAMA_BASE_URL=http://localhost:11434, and inside a
+      # container localhost is the container itself.
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+    volumes:
+      # Named volume, not a bind mount: Chroma and SQLite both use file locking,
+      # which is unreliable across the bind-mount boundary on macOS and Windows.
+      - qa-data:/app/data
+    extra_hosts:
+      # Makes host.docker.internal resolve on Linux too.
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+volumes:
+  qa-data:

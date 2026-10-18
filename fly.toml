@@ -1,0 +1,111 @@
+# Fly.io deployment for the Document Q&A Tool.
+# Rename `app` below, then: fly launch --no-deploy && fly deploy
+#
+# Two constraints in this file are not style preferences, and changing either
+# breaks the app in ways that look like something else:
+#
+#   1. ONE machine, never two. Ingestion is queued in an in-process asyncio
+#      queue, and both SQLite and Chroma are embedded libraries holding file
+#      locks on a local disk. A second machine gets its own queue and its own
+#      copy of the data, so uploads land on one machine and queries hit the
+#      other. Symptom: a document that ingests successfully and then cannot be
+#      found. Scaling out means moving the queue to Redis and the vectors to a
+#      server-based store first.
+#
+#   2. A persistent volume. Fly machine filesystems are ephemeral -- without the
+#      mount below, every deploy and every restart silently empties the library.
+
+app = "document-qa"                 # must be globally unique on Fly
+primary_region = "iad"              # pick one near your users: fly platform regions
+
+[build]
+  dockerfile = "Dockerfile"
+
+# --------------------------------------------------------------------------- #
+# Persistent storage
+# --------------------------------------------------------------------------- #
+# Create it once, in the same region, before the first deploy:
+#   fly volumes create qa_data --region iad --size 3
+#
+# 3 GB is roomy for documents plus the Chroma index; grow with `fly volumes
+# extend`. A volume is tied to one machine, which is the same reason the count
+# below is 1.
+[mounts]
+  source = "qa_data"
+  destination = "/app/data"
+
+# --------------------------------------------------------------------------- #
+# Runtime
+# --------------------------------------------------------------------------- #
+[env]
+  APP_ENV = "prod"                  # also what marks the visitor cookie Secure
+  LOG_LEVEL = "INFO"
+
+  # Give each browser its own private library. Without this every visitor shares
+  # one document set, which on a public link means strangers reading each
+  # other's uploads.
+  VISITOR_ISOLATION = "true"
+
+  # A public link is an open invitation to fill your disk. Zero means unlimited,
+  # which is the right local default and the wrong one here.
+  MAX_DOCUMENTS_PER_VISITOR = "5"
+  MAX_UPLOAD_MB = "15"
+
+  # Hosted inference. There is no Ollama in this container and no GPU under it,
+  # so both providers point at an OpenAI-compatible API.
+  EMBEDDING_PROVIDER = "openai"
+  LLM_PROVIDER = "openai"
+  LLM_MODEL = "gpt-4o-mini"
+  EMBEDDING_MODEL = "text-embedding-3-small"
+
+  # Must match the embedding model's real output width, or retrieval degrades
+  # without erroring. text-embedding-3-small is 1536, not the 768 that
+  # nomic-embed-text produces locally.
+  EMBEDDING_DIM = "1536"
+
+  # Paths inside the container, on the mounted volume.
+  DATA_DIR = "/app/data"
+  UPLOAD_DIR = "/app/data/uploads"
+  CHROMA_DIR = "/app/data/chroma"
+  SQLITE_PATH = "/app/data/metadata.db"
+
+# Secrets are set out of band so they never land in this file or in git:
+#   fly secrets set OPENAI_API_KEY=sk-...
+# Optionally gate the whole app with a shared key:
+#   fly secrets set API_KEY=$(python -c "import secrets;print(secrets.token_urlsafe(32))")
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  auto_stop_machines = "suspend"     # idles cheaply; the volume persists
+  auto_start_machines = true
+
+  # Zero, not one: a stopped machine still holds its volume, and a second
+  # machine must never be started. See constraint 1 above.
+  min_machines_running = 0
+
+  [http_service.concurrency]
+    # Requests, not connections: SSE streams hold a connection open for the
+    # length of an answer, so a connection limit would throttle on stream count
+    # rather than on actual load.
+    type = "requests"
+    soft_limit = 20
+    hard_limit = 40
+
+# Embedding a large PDF can occupy the event loop for a while, so the grace
+# period is generous -- a stricter one restarts the machine mid-ingestion and
+# leaves the document stuck in "processing".
+[[http_service.checks]]
+  grace_period = "30s"
+  interval = "30s"
+  timeout = "10s"
+  method = "GET"
+  path = "/health"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  # 512 MB is not enough: chromadb plus its ONNX runtime dependency reserve a
+  # few hundred MB before a single document is indexed.
+  memory = "1gb"
+  cpus = 1
+  count = 1                          # see constraint 1

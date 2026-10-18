@@ -1,0 +1,2195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Document Q&amp;A</title>
+<!--
+  Single-file frontend, served by FastAPI from the same origin.
+
+  Deliberately dependency-free: no build step, no CDN. The whole point of this
+  stack is that it runs on your machine with no network, so the UI shouldn't
+  break the moment you go offline.
+
+  The API key, when auth is enabled, is held in a JS variable only -- never in
+  localStorage. Reloading asks again; that's the trade for not leaving a
+  credential sitting in browser storage.
+-->
+<style>
+  :root {
+    color-scheme: light;
+
+    /* Marking up a document is the physical gesture this tool automates, so
+       highlighter yellow carries every citation and every piece of evidence.
+       Everything else stays quiet ink on cool paper. */
+    --ink:       #131b24;
+    --ink-soft:  #29384a;
+    /* Four steps of ink, every one contrast-checked against both white and the
+       rail's paper tone. --slate-dim carries most of the small mono metadata,
+       so it is the step most tempting to lighten and the one that would fail
+       WCAG AA first if it were. Do not lighten it past #636e7a. */
+    --slate:     #4a5a6d;
+    --slate-dim: #636e7a;
+    --paper:     #edf0f4;
+    --card:      #ffffff;
+    --rule:      #d8dee6;
+    --rule-soft: #e8ecf1;
+    --mark:      #ffe536;
+    --mark-soft: #fff6c0;
+    --mark-deep: #7d6000;
+    --mark-edge: #ecc900;
+    --ready:     #12735a;
+    --warn:      #9a4a08;
+    --fail:      #b02318;
+
+    /* Four voices. Slab serif is the tool speaking -- it reads stamped and
+       institutional, the register of a document that has been processed.
+       Grotesque for chrome, old-style serif for generated prose, mono for
+       machine numbers. The voice change tells you who is speaking. */
+    --display: Superclarendon, Rockwell, "Bookman Old Style", Charter, "Bitstream Charter", Georgia, serif;
+    --sans:  Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, ui-serif, serif;
+    --mono:  ui-monospace, "SF Mono", SFMono-Regular, "JetBrains Mono", "IBM Plex Mono", Menlo, Consolas, monospace;
+
+    --rail-w: 328px;
+    --measure: 760px;
+
+    --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    height: 100%;
+    margin: 0;
+  }
+
+  body {
+    font-family: var(--sans);
+    font-size: 14px;
+    color: var(--ink);
+    background: var(--card);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* Load-bearing: #scopeNote, #clearScope and the uncited .ev-list are all
+     toggled with the hidden attribute, so no later display rule may win. */
+  [hidden] { display: none !important; }
+
+  button { font-family: inherit; font-size: inherit; cursor: pointer; }
+
+  button:focus-visible, a:focus-visible, input:focus-visible,
+  textarea:focus-visible, [tabindex]:focus-visible {
+    outline: 2px solid var(--ink);
+    outline-offset: 2px;
+    border-radius: 3px;
+  }
+
+  ::selection { background: var(--mark); color: var(--ink); }
+
+  .eyebrow {
+    font: 500 10.5px/1 var(--mono);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--slate-dim);
+  }
+
+  .num { font-variant-numeric: tabular-nums; }
+
+  .sr {
+    position: absolute;
+    width: 1px; height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+
+  /* ============================================================= signature ==
+     A highlighter stroke, built to look like ink rather than a rounded box:
+     asymmetric elliptical corners so no two ends match, a slight skew and
+     rotation off true, and a darker edge where the felt tip dragged. It sits
+     behind the text and paints itself left to right, which is the gesture the
+     whole tool automates. */
+  @keyframes stroke {
+    from { clip-path: inset(0 100% 0 0); }
+    to   { clip-path: inset(0 -3% 0 0); }
+  }
+
+  /* ---------------------------------------------------------------- shell */
+  .app {
+    display: grid;
+    grid-template-columns: var(--rail-w) 1fr;
+    height: 100vh;
+    height: 100dvh;
+  }
+
+  .rail {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    background-color: var(--paper);
+    /* Fibre grain, inline so it survives going offline. The one texture in the
+       design; the highlighter is the star and doesn't need competition. */
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)' opacity='0.045'/%3E%3C/svg%3E");
+    border-right: 1px solid var(--rule);
+  }
+
+  .rail-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 20px 20px 16px;
+    border-bottom: 1px solid var(--rule);
+  }
+
+  .wordmark {
+    font: 400 19px/1.05 var(--display);
+    letter-spacing: -0.015em;
+    margin: 0;
+  }
+
+  .tagline {
+    margin: 7px 0 0;
+    font: 400 10.5px/1.4 var(--mono);
+    letter-spacing: 0.01em;
+    color: var(--slate-dim);
+  }
+
+  .ghost {
+    background: transparent;
+    border: 1px solid var(--rule);
+    border-radius: 5px;
+    padding: 5px 10px;
+    color: var(--ink-soft);
+    font-size: 12.5px;
+    font-weight: 500;
+    white-space: nowrap;
+    transition: background 0.14s, border-color 0.14s, color 0.14s;
+  }
+
+  .ghost:hover {
+    background: #fff;
+    border-color: var(--slate-dim);
+    color: var(--ink);
+  }
+
+  .rail-scroll {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 18px 20px 22px;
+    scrollbar-width: thin;
+  }
+
+  .block { margin-bottom: 26px; }
+  .block:last-child { margin-bottom: 0; }
+
+  .block-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+
+  /* --------------------------------------------------------------- upload */
+  .drop {
+    position: relative;
+    border: 1.5px dashed var(--rule);
+    border-radius: 8px;
+    background: #fff;
+    padding: 20px 14px;
+    text-align: center;
+    transition: border-color 0.16s, background 0.16s, transform 0.16s var(--ease);
+  }
+
+  .drop.hot {
+    border-color: var(--mark-edge);
+    background: var(--mark-soft);
+    transform: scale(1.015);
+  }
+
+  .drop-title {
+    font: 400 15px/1.2 var(--display);
+    letter-spacing: -0.01em;
+  }
+
+  .drop-hint {
+    margin: 5px 0 0;
+    font: 400 10.5px/1.4 var(--mono);
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--slate-dim);
+  }
+
+  .drop-btn {
+    margin-top: 13px;
+    background: var(--ink);
+    color: #fff;
+    border: 0;
+    border-radius: 5px;
+    padding: 8px 14px;
+    font-size: 12.5px;
+    font-weight: 500;
+    transition: background 0.14s;
+  }
+
+  .drop-btn:hover { background: var(--ink-soft); }
+
+  /* -------------------------------------------------------------- library */
+  .doc-list, .session-list { list-style: none; margin: 0; padding: 0; }
+
+  .doc {
+    position: relative;
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    padding: 9px 10px;
+    border-radius: 6px;
+    border: 1px solid transparent;
+    cursor: pointer;
+    transition: background 0.13s, border-color 0.13s;
+  }
+
+  .doc:hover { background: #fff; border-color: var(--rule-soft); }
+  .doc.picked { background: #fff; border-color: var(--rule); }
+
+  /* A picked document gets a marker stripe down its edge. */
+  .doc.picked::before {
+    content: "";
+    position: absolute;
+    left: -1px; top: 6px; bottom: 6px;
+    width: 3px;
+    border-radius: 2px;
+    background: var(--mark);
+  }
+
+  .doc.locked { cursor: default; opacity: 0.72; }
+  .doc.locked:hover { background: transparent; border-color: transparent; }
+
+  .doc input { position: absolute; opacity: 0; pointer-events: none; }
+
+  .tick {
+    flex: none;
+    width: 15px;
+    height: 15px;
+    margin-top: 2px;
+    border: 1.5px solid var(--slate-dim);
+    border-radius: 3px;
+    background: #fff;
+    position: relative;
+    transition: background 0.13s, border-color 0.13s;
+  }
+
+  .doc.picked .tick { background: var(--mark); border-color: var(--mark-edge); }
+
+  .doc.picked .tick::after {
+    content: "";
+    position: absolute;
+    left: 3.5px; top: 0.5px;
+    width: 5px; height: 9px;
+    border: 1.9px solid var(--ink);
+    border-top: 0; border-left: 0;
+    transform: rotate(40deg);
+  }
+
+  .doc.locked .tick { border-style: dotted; background: transparent; }
+
+  .doc-body { min-width: 0; flex: 1; }
+
+  .doc-name {
+    font-size: 12.75px;
+    font-weight: 500;
+    line-height: 1.35;
+    word-break: break-word;
+  }
+
+  .doc-meta {
+    margin-top: 4px;
+    font: 400 10.5px/1.4 var(--mono);
+    color: var(--slate-dim);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+
+  .dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--slate-dim);
+    flex: none;
+  }
+
+  .dot.ready { background: var(--ready); }
+  .dot.failed { background: var(--fail); }
+  .dot.processing, .dot.pending {
+    background: var(--mark-edge);
+    animation: breathe 1.5s ease-in-out infinite;
+  }
+
+  @keyframes breathe { 0%, 100% { opacity: 1 } 50% { opacity: 0.25 } }
+
+  .doc-err {
+    margin-top: 5px;
+    font: 400 10.5px/1.45 var(--mono);
+    color: var(--fail);
+    word-break: break-word;
+  }
+
+  .bar {
+    margin-top: 7px;
+    height: 3px;
+    border-radius: 2px;
+    background: var(--rule);
+    overflow: hidden;
+  }
+
+  .bar span {
+    display: block;
+    height: 100%;
+    background: var(--mark-edge);
+    transition: width 0.3s ease;
+  }
+
+  .kill {
+    flex: none;
+    border: 0;
+    background: transparent;
+    color: var(--slate-dim);
+    font-size: 16px;
+    line-height: 1;
+    padding: 2px 4px;
+    border-radius: 4px;
+    opacity: 0;
+    transition: opacity 0.13s, color 0.13s;
+  }
+
+  .doc:hover .kill, .kill:focus-visible { opacity: 1; }
+  .kill:hover { color: var(--fail); }
+
+  .scope-note {
+    margin-top: 11px;
+    padding: 8px 10px;
+    border-radius: 5px;
+    background: #fff;
+    border: 1px solid var(--rule-soft);
+    border-left: 3px solid var(--mark);
+    font: 400 11px/1.45 var(--mono);
+    color: var(--slate);
+    word-break: break-word;
+  }
+
+  .link {
+    background: none;
+    border: 0;
+    padding: 0;
+    color: var(--slate);
+    font: 500 10.5px/1 var(--mono);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+    text-decoration-thickness: 1px;
+  }
+
+  .link:hover { color: var(--ink); text-decoration-color: var(--mark-edge); }
+
+  /* ------------------------------------------------------------- sessions */
+  .session {
+    position: relative;
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    width: 100%;
+    text-align: left;
+    background: none;
+    border: 0;
+    border-radius: 5px;
+    padding: 8px 10px;
+    color: var(--ink-soft);
+    transition: background 0.13s;
+  }
+
+  .session:hover { background: #fff; }
+  .session.live { background: #fff; }
+
+  .session.live::before {
+    content: "";
+    position: absolute;
+    left: 0; top: 5px; bottom: 5px;
+    width: 3px;
+    border-radius: 2px;
+    background: var(--mark);
+  }
+
+  .session-title {
+    flex: 1;
+    min-width: 0;
+    font-size: 12.5px;
+    line-height: 1.35;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .session-count { font: 400 10.5px/1 var(--mono); color: var(--slate-dim); }
+
+  .empty-note {
+    font: 400 11.5px/1.5 var(--mono);
+    color: var(--slate-dim);
+    padding: 2px 0;
+  }
+
+  /* ----------------------------------------------------------- health rig */
+  .rig {
+    border-top: 1px solid var(--rule);
+    padding: 13px 20px 15px;
+    font: 400 10.5px/1.65 var(--mono);
+    color: var(--slate-dim);
+  }
+
+  .rig-row { display: flex; gap: 8px; align-items: baseline; }
+
+  .rig-key {
+    color: var(--slate-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    min-width: 3.6em;
+  }
+
+  .rig-val { color: var(--ink-soft); }
+
+  .rig-alert {
+    margin-top: 9px;
+    padding: 9px 10px;
+    border-radius: 5px;
+    background: #fff7f3;
+    border: 1px solid #f0d6cd;
+    color: var(--warn);
+    line-height: 1.55;
+  }
+
+  .rig-alert code {
+    font-family: var(--mono);
+    background: #fff;
+    border: 1px solid #efdad3;
+    border-radius: 3px;
+    padding: 0 3px;
+  }
+
+  /* ---------------------------------------------------------------- stage */
+  .stage {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+  }
+
+  .topbar {
+    display: none;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--rule);
+  }
+
+  .thread {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 40px 0 12px;
+    scroll-behavior: smooth;
+  }
+
+  .wrap { max-width: var(--measure); margin: 0 auto; padding: 0 32px; }
+
+  /* ------------------------------------------------------------ zerostate */
+  .zero { padding-top: 5vh; }
+
+  .zero-stamp {
+    display: inline-block;
+    margin-bottom: 20px;
+    padding: 4px 9px;
+    border: 1px solid var(--rule);
+    border-radius: 3px;
+    font: 500 10px/1.4 var(--mono);
+    letter-spacing: 0.13em;
+    text-transform: uppercase;
+    color: var(--mark-deep);
+    background: var(--mark-soft);
+  }
+
+  .zero-lead {
+    font: 400 clamp(28px, 4.1vw, 44px)/1.16 var(--display);
+    letter-spacing: -0.021em;
+    margin: 0 0 20px;
+    max-width: 19em;
+    text-wrap: balance;
+  }
+
+  /* The stroke, introduced where it teaches what it means. */
+  .zero-lead mark {
+    background: none;
+    color: inherit;
+    position: relative;
+    padding: 0 0.06em;
+    white-space: nowrap;
+  }
+
+  .zero-lead mark::before {
+    content: "";
+    position: absolute;
+    inset: 14% -0.16em 8% -0.16em;
+    background: var(--mark);
+    border-radius: 0.7em 0.2em 0.6em 0.24em / 1.1em 0.34em 0.9em 0.3em;
+    border-bottom: 2px solid rgba(236, 201, 0, 0.55);
+    transform: skewX(-9deg) rotate(-0.7deg);
+    z-index: -1;
+    animation: stroke 0.62s var(--ease) 0.35s both;
+  }
+
+  .zero-body {
+    font: 400 14.5px/1.7 var(--sans);
+    color: var(--slate);
+    max-width: 40em;
+    margin: 0 0 32px;
+  }
+
+  .steps { list-style: none; margin: 0; padding: 0; max-width: 36em; }
+
+  .step {
+    display: grid;
+    grid-template-columns: 2.2em 1fr;
+    gap: 14px;
+    padding: 14px 0;
+    border-top: 1px solid var(--rule-soft);
+  }
+
+  .step-n {
+    font: 500 10.5px/1.75 var(--mono);
+    letter-spacing: 0.06em;
+    color: var(--mark-deep);
+  }
+
+  .step-t { font-size: 13.5px; line-height: 1.6; color: var(--ink-soft); }
+
+  .step-t code {
+    font: 400 12px/1 var(--mono);
+    background: var(--paper);
+    border: 1px solid var(--rule);
+    border-radius: 3px;
+    padding: 1px 4px;
+  }
+
+  /* ------------------------------------------------------------- exchange */
+  .turn { padding-bottom: 40px; }
+
+  .ask {
+    display: grid;
+    grid-template-columns: 1.7em 1fr;
+    gap: 12px;
+    align-items: start;
+    margin-bottom: 16px;
+  }
+
+  .ask-mark {
+    font: 500 10.5px/2.05 var(--mono);
+    color: var(--mark-deep);
+  }
+
+  .ask-text {
+    font: 400 clamp(18px, 2.1vw, 22px)/1.36 var(--display);
+    letter-spacing: -0.014em;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  .ask-scope {
+    margin: 7px 0 0;
+    font: 400 10.5px/1.5 var(--mono);
+    color: var(--slate-dim);
+  }
+
+  .reply { padding-left: calc(1.7em + 12px); }
+
+  .prose {
+    font: 400 16.5px/1.68 var(--serif);
+    color: var(--ink);
+  }
+
+  .prose p { margin: 0 0 0.85em; }
+  .prose p:last-child { margin-bottom: 0; }
+  .prose ul { margin: 0 0 0.85em; padding-left: 1.2em; }
+  .prose li { margin-bottom: 0.32em; }
+  .prose strong { font-weight: 650; }
+
+  .prose code {
+    font: 400 0.84em/1 var(--mono);
+    background: var(--paper);
+    border: 1px solid var(--rule);
+    border-radius: 3px;
+    padding: 1px 4px;
+  }
+
+  .prose.thin { color: var(--slate); font-style: italic; }
+
+  .caret {
+    display: inline-block;
+    width: 0.42em;
+    height: 1.02em;
+    margin-left: 1px;
+    vertical-align: -0.16em;
+    background: var(--ink);
+    animation: blink 1.05s step-end infinite;
+  }
+
+  @keyframes blink { 50% { opacity: 0 } }
+
+  /* A citation is a highlighter stroke you can click. It paints itself in as
+     the answer resolves, which is the moment the tool is selling. */
+  .cite {
+    position: relative;
+    display: inline-block;
+    border: 0;
+    background: none;
+    padding: 0 0.26em;
+    margin: 0 0.03em;
+    font: 550 0.66em/1 var(--mono);
+    color: var(--ink);
+    vertical-align: 0.17em;
+    transition: transform 0.13s var(--ease);
+  }
+
+  .cite::before {
+    content: "";
+    position: absolute;
+    inset: -8% -0.04em -6% -0.04em;
+    background: var(--mark);
+    border-radius: 0.6em 0.18em 0.5em 0.22em / 1em 0.3em 0.8em 0.26em;
+    border-bottom: 1.5px solid rgba(236, 201, 0, 0.6);
+    transform: skewX(-11deg) rotate(-1.2deg);
+    z-index: -1;
+    transition: background 0.13s;
+    animation: stroke 0.34s var(--ease) both;
+  }
+
+  .cite:hover { transform: translateY(-1.5px); }
+  .cite:hover::before { background: var(--mark-edge); }
+
+  .trace {
+    margin-top: 18px;
+    font: 400 10.5px/1.65 var(--mono);
+    color: var(--slate-dim);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 9px;
+  }
+
+  .trace b { font-weight: 500; color: var(--slate); }
+
+  .flag {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 16px;
+    padding: 9px 12px;
+    border-radius: 5px;
+    background: #fffaef;
+    border: 1px solid #efdfbd;
+    border-left: 3px solid var(--warn);
+    font-size: 12.5px;
+    line-height: 1.55;
+    color: var(--warn);
+  }
+
+  /* ------------------------------------------------------------- evidence */
+  .evidence-head {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    margin: 26px 0 10px;
+  }
+
+  .evidence-rule {
+    flex: 1;
+    height: 1px;
+    background: var(--rule);
+  }
+
+  .ev-list { list-style: none; margin: 0; padding: 0; }
+
+  /* An excerpt, presented like a photocopied page: white stock, hairline
+     border, and a marker rule down the margin where you'd have drawn one. */
+  .ev {
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    margin-bottom: 8px;
+    background: #fff;
+    overflow: hidden;
+    transition: border-color 0.16s, box-shadow 0.16s;
+  }
+
+  .ev:hover { box-shadow: 0 1px 0 var(--rule-soft), 0 8px 22px -18px rgba(19, 27, 36, 0.5); }
+  .ev.lit { border-color: var(--mark-edge); }
+
+  .ev-top {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    width: 100%;
+    text-align: left;
+    background: none;
+    border: 0;
+    padding: 11px 13px;
+    transition: background 0.13s;
+  }
+
+  .ev-top:hover { background: var(--paper); }
+
+  .ev-n {
+    position: relative;
+    flex: none;
+    font: 550 10.5px/1.5 var(--mono);
+    color: var(--ink);
+    min-width: 1.5em;
+    text-align: center;
+  }
+
+  .ev-n::before {
+    content: "";
+    position: absolute;
+    inset: -12% -0.18em -8% -0.18em;
+    background: var(--mark);
+    border-radius: 0.5em 0.16em 0.44em 0.2em / 0.9em 0.28em 0.75em 0.24em;
+    transform: skewX(-10deg) rotate(-1deg);
+    z-index: -1;
+  }
+
+  .ev-where { flex: 1; min-width: 0; }
+
+  .ev-doc {
+    font-size: 12.75px;
+    font-weight: 500;
+    line-height: 1.4;
+    word-break: break-word;
+  }
+
+  .ev-stats {
+    margin-top: 3px;
+    font: 400 10.5px/1.5 var(--mono);
+    color: var(--slate-dim);
+  }
+
+  .ev-chev {
+    flex: none;
+    font: 400 10px/1.5 var(--mono);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--slate-dim);
+  }
+
+  .ev-text {
+    display: none;
+    margin: 0 13px 13px;
+    padding: 11px 0 0 13px;
+    border-top: 1px solid var(--rule-soft);
+    border-left: 2px solid var(--rule);
+    font: 400 13.5px/1.68 var(--serif);
+    color: var(--ink-soft);
+    white-space: pre-wrap;
+    word-break: break-word;
+    transition: border-left-color 0.2s;
+  }
+
+  .ev.open .ev-text { display: block; }
+  .ev.lit .ev-text { border-left-color: var(--mark); }
+
+  /* The wash is re-triggered from JS by removing and re-adding .lit. */
+  .ev.lit .ev-text {
+    background-image: linear-gradient(var(--mark-soft), var(--mark-soft));
+    background-repeat: no-repeat;
+    background-size: 100% 100%;
+    animation: wash 0.5s ease-out;
+  }
+
+  @keyframes wash { from { background-size: 0 100% } to { background-size: 100% 100% } }
+
+  .more {
+    margin-top: 6px;
+    background: none;
+    border: 0;
+    padding: 4px 0;
+    font: 400 11px/1.5 var(--mono);
+    color: var(--slate);
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
+
+  .more:hover { color: var(--ink); text-decoration-color: var(--mark-edge); }
+
+  /* ------------------------------------------------------------- composer */
+  .composer {
+    border-top: 1px solid var(--rule);
+    background: var(--card);
+    padding: 16px 0 20px;
+  }
+
+  .field {
+    border: 1px solid var(--rule);
+    border-radius: 9px;
+    background: #fff;
+    padding: 11px 13px 9px;
+    transition: border-color 0.16s, box-shadow 0.16s;
+  }
+
+  .field.active {
+    border-color: var(--slate-dim);
+    box-shadow: 0 1px 0 var(--rule-soft), 0 10px 26px -20px rgba(19, 27, 36, 0.55);
+  }
+
+  .field textarea {
+    width: 100%;
+    border: 0;
+    outline: 0;
+    resize: none;
+    background: none;
+    font-family: var(--sans);
+    font-size: 14.5px;
+    line-height: 1.55;
+    color: var(--ink);
+    max-height: 168px;
+    min-height: 24px;
+  }
+
+  .field textarea::placeholder { color: var(--slate-dim); }
+
+  .field-foot {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-top: 8px;
+  }
+
+  .scope-chip {
+    font: 400 10.5px/1.45 var(--mono);
+    color: var(--slate-dim);
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .send {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--ink);
+    color: #fff;
+    border: 0;
+    border-radius: 6px;
+    padding: 8px 14px;
+    font-size: 13px;
+    font-weight: 500;
+    transition: background 0.14s, transform 0.14s var(--ease);
+  }
+
+  .send:hover:not(:disabled) { background: var(--ink-soft); transform: translateY(-1px); }
+  .send:active:not(:disabled) { transform: none; }
+  .send:disabled { background: var(--rule); color: var(--slate-dim); cursor: not-allowed; }
+
+  .send kbd {
+    font: 400 10px/1 var(--mono);
+    opacity: 0.65;
+    border: 1px solid currentColor;
+    border-radius: 3px;
+    padding: 2px 3px;
+  }
+
+  /* ---------------------------------------------------------------- toast */
+  .toasts {
+    position: fixed;
+    bottom: 18px;
+    right: 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    z-index: 40;
+    max-width: 380px;
+  }
+
+  .toast {
+    background: var(--ink);
+    color: #fff;
+    border-radius: 7px;
+    padding: 11px 14px;
+    font-size: 12.5px;
+    line-height: 1.5;
+    box-shadow: 0 12px 32px -14px rgba(19, 27, 36, 0.65);
+    animation: rise 0.24s var(--ease);
+  }
+
+  .toast b {
+    display: block;
+    font: 500 10px/1.6 var(--mono);
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--mark);
+    opacity: 0.9;
+  }
+
+  .toast.bad { background: var(--fail); }
+  .toast.bad b { color: #fff; opacity: 0.7; }
+
+  @keyframes rise { from { opacity: 0; transform: translateY(8px) } }
+
+  /* ---------------------------------------------------------------- modal */
+  .veil {
+    position: fixed;
+    inset: 0;
+    background: rgba(19, 27, 36, 0.45);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    z-index: 50;
+  }
+
+  .veil.on { display: flex; }
+
+  .modal {
+    background: #fff;
+    border-radius: 10px;
+    padding: 24px;
+    width: 100%;
+    max-width: 390px;
+    box-shadow: 0 28px 70px -24px rgba(19, 27, 36, 0.55);
+    animation: rise 0.24s var(--ease);
+  }
+
+  .modal h2 {
+    margin: 0 0 10px;
+    font: 400 19px/1.2 var(--display);
+    letter-spacing: -0.015em;
+  }
+
+  .modal p { margin: 0 0 16px; font-size: 13px; line-height: 1.6; color: var(--slate); }
+
+  .modal p code {
+    font: 400 12px/1 var(--mono);
+    background: var(--paper);
+    border: 1px solid var(--rule);
+    border-radius: 3px;
+    padding: 1px 4px;
+  }
+
+  .modal input {
+    width: 100%;
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    padding: 10px 12px;
+    font: 400 13px/1.4 var(--mono);
+    margin-bottom: 14px;
+  }
+
+  .modal-row { display: flex; justify-content: flex-end; gap: 8px; }
+
+  /* --------------------------------------------------------------- motion */
+  /* Scroll reveal. Applied by script only, so anything the observer never
+     reaches stays visible rather than stuck at opacity 0. */
+  .reveal { opacity: 0; transform: translateY(10px); }
+
+  .reveal.in {
+    opacity: 1;
+    transform: none;
+    transition: opacity 0.42s ease, transform 0.42s var(--ease);
+  }
+
+  /* --------------------------------------------------------------- mobile */
+  .scrim {
+    position: fixed;
+    inset: 0;
+    background: rgba(19, 27, 36, 0.38);
+    z-index: 18;
+    display: none;
+  }
+
+  @media (max-width: 880px) {
+    .app { grid-template-columns: 1fr; }
+
+    .rail {
+      position: fixed;
+      inset: 0 auto 0 0;
+      width: min(88vw, var(--rail-w));
+      z-index: 20;
+      transform: translateX(-102%);
+      transition: transform 0.22s var(--ease);
+      box-shadow: 0 0 40px -10px rgba(19, 27, 36, 0.42);
+    }
+
+    .rail.open { transform: none; }
+    .scrim.on { display: block; }
+    .topbar { display: flex; }
+    .wrap { padding: 0 18px; }
+    .thread { padding-top: 24px; }
+    .reply { padding-left: 0; }
+    .zero { padding-top: 2vh; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation-duration: 0.001s !important; transition-duration: 0.001s !important; }
+    .thread { scroll-behavior: auto; }
+    .reveal { opacity: 1; transform: none; }
+  }
+</style>
+</head>
+<body>
+
+<div class="scrim" id="scrim"></div>
+
+<div class="app">
+  <!-- ============================================================== rail -->
+  <aside class="rail" id="rail">
+    <div class="rail-head">
+      <div>
+        <h1 class="wordmark">Document Q&amp;A</h1>
+        <p class="tagline" id="tagline">local models &middot; cited answers</p>
+      </div>
+      <button class="ghost" id="newChat" type="button">New chat</button>
+    </div>
+
+    <div class="rail-scroll">
+      <div class="block">
+        <div class="drop" id="drop">
+          <div class="drop-title">Add a document</div>
+          <p class="drop-hint">pdf &middot; docx &middot; txt &middot; md</p>
+          <button class="drop-btn" id="pick" type="button">Choose files</button>
+          <input class="sr" type="file" id="file" multiple
+                 accept=".pdf,.docx,.txt,.md,.markdown">
+        </div>
+      </div>
+
+      <div class="block">
+        <div class="block-head">
+          <span class="eyebrow">Library</span>
+          <button class="link" id="clearScope" type="button" hidden>Ask all</button>
+        </div>
+        <ul class="doc-list" id="docs"></ul>
+        <div class="scope-note" id="scopeNote" hidden></div>
+      </div>
+
+      <div class="block">
+        <div class="block-head"><span class="eyebrow">Recent chats</span></div>
+        <ul class="session-list" id="sessions"></ul>
+      </div>
+    </div>
+
+    <div class="rig" id="rig"></div>
+  </aside>
+
+  <!-- ============================================================= stage -->
+  <main class="stage">
+    <div class="topbar">
+      <button class="ghost" id="railToggle" type="button">Library</button>
+      <strong style="font-size:13px">Document Q&amp;A</strong>
+    </div>
+
+    <div class="thread" id="thread">
+      <div class="wrap zero" id="zero">
+        <span class="zero-stamp">No network required</span>
+        <p class="zero-lead">
+          Ask a question. Every claim in the answer comes back
+          <mark>marked</mark> with the passage it came from.
+        </p>
+        <p class="zero-body">
+          Text extraction, embeddings, retrieval and generation all run on this
+          machine. Answers cite their sources by document and page, and when the
+          retrieved passages don't support an answer, you get told that instead
+          of a guess.
+        </p>
+        <ol class="steps">
+          <li class="step">
+            <span class="step-n">01</span>
+            <span class="step-t">Add a PDF, DOCX, TXT or Markdown file. Text extraction,
+              chunking and embedding run in the background &mdash; the upload returns
+              straight away.</span>
+          </li>
+          <li class="step">
+            <span class="step-n">02</span>
+            <span class="step-t">Wait for the status dot to turn green. Until then the
+              document isn't searchable yet.</span>
+          </li>
+          <li class="step">
+            <span class="step-n">03</span>
+            <span class="step-t">Ask away. Tick documents in the library to narrow the
+              search, or leave them all unticked to search everything.</span>
+          </li>
+        </ol>
+      </div>
+    </div>
+
+    <div class="composer">
+      <div class="wrap">
+        <form class="field" id="field">
+          <label class="sr" for="q">Your question</label>
+          <textarea id="q" rows="1" placeholder="What do these documents say about&hellip;"></textarea>
+          <div class="field-foot">
+            <span class="scope-chip" id="scopeChip">Add a document to begin</span>
+            <button class="send" id="send" type="submit" disabled>
+              Ask <kbd>&crarr;</kbd>
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </main>
+</div>
+
+<div class="toasts" id="toasts"></div>
+
+<div class="veil" id="authVeil">
+  <form class="modal" id="authForm">
+    <h2>This API needs a key</h2>
+    <p>Paste the value of <code>API_KEY</code> from the server's environment. It's
+      held in memory for this tab only &mdash; reloading will ask again.</p>
+    <label class="sr" for="apiKey">API key</label>
+    <input type="password" id="apiKey" placeholder="API key" autocomplete="off">
+    <div class="modal-row">
+      <button class="drop-btn" type="submit" style="margin-top:0">Use key</button>
+    </div>
+  </form>
+</div>
+<script>
+"use strict";
+
+/* ===================================================================== state */
+
+const state = {
+  apiKey: null,          // in memory only, never persisted
+  docs: [],              // DocumentSummary[]
+  scope: new Set(),      // selected document ids; empty === whole library
+  sessionId: null,
+  sessions: [],
+  health: null,
+  busy: false,
+  poll: null,
+  uploads: new Map(),    // temp id -> {name, pct}
+};
+
+const $ = (id) => document.getElementById(id);
+const el = (tag, cls, text) => {
+  const node = document.createElement(tag);
+  if (cls) node.className = cls;
+  if (text != null) node.textContent = text;
+  return node;
+};
+
+const esc = (s) => String(s == null ? "" : s)
+  .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+  .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+
+const fmtBytes = (n) => {
+  if (!n) return "0 B";
+  const u = ["B", "KB", "MB", "GB"];
+  const i = Math.min(Math.floor(Math.log(n) / Math.log(1024)), u.length - 1);
+  return `${(n / Math.pow(1024, i)).toFixed(i ? 1 : 0)} ${u[i]}`;
+};
+
+const uuid = () => (crypto.randomUUID
+  ? crypto.randomUUID()
+  : "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+      const r = (Math.random() * 16) | 0;
+      return (c === "x" ? r : (r & 0x3) | 0x8).toString(16);
+    }));
+
+/* ======================================================================= api */
+
+/** Every failure the API can produce arrives as {error:{code,message,details}}. */
+class ApiError extends Error {
+  constructor(code, message, status, details) {
+    super(message);
+    this.code = code;
+    this.status = status;
+    this.details = details;
+  }
+}
+
+function authHeaders(extra) {
+  const h = Object.assign({}, extra || {});
+  if (state.apiKey) h["X-API-Key"] = state.apiKey;
+  return h;
+}
+
+async function readError(res) {
+  let code = "http_error";
+  let message = `${res.status} ${res.statusText}`;
+  let details = null;
+  try {
+    const body = await res.json();
+    if (body && body.error) {
+      code = body.error.code || code;
+      message = body.error.message || message;
+      details = body.error.details || null;
+    }
+  } catch (_) { /* non-JSON body: keep the status line */ }
+  return new ApiError(code, message, res.status, details);
+}
+
+async function api(path, opts) {
+  const options = Object.assign({}, opts);
+  options.headers = authHeaders(options.headers);
+  let res;
+  try {
+    res = await fetch(path, options);
+  } catch (err) {
+    throw new ApiError("network_error",
+      "Can't reach the server. Is uvicorn still running?", 0, null);
+  }
+  if (res.status === 401) {
+    openAuth();
+    throw await readError(res);
+  }
+  if (!res.ok) throw await readError(res);
+  if (res.status === 204) return null;
+  return res.json();
+}
+
+/* ===================================================================== toast */
+
+function toast(message, kind, label) {
+  const node = el("div", "toast" + (kind === "bad" ? " bad" : ""));
+  if (label) node.appendChild(el("b", null, label));
+  node.appendChild(document.createTextNode(message));
+  $("toasts").appendChild(node);
+  setTimeout(() => {
+    node.style.opacity = "0";
+    node.style.transition = "opacity .25s";
+    setTimeout(() => node.remove(), 260);
+  }, kind === "bad" ? 7000 : 4200);
+}
+
+const shout = (err) => toast(err.message || String(err), "bad", err.code || "error");
+
+/* ====================================================================== auth */
+
+function openAuth() { $("authVeil").classList.add("on"); $("apiKey").focus(); }
+
+$("authForm").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const value = $("apiKey").value.trim();
+  if (!value) return;
+  state.apiKey = value;
+  $("authVeil").classList.remove("on");
+  $("apiKey").value = "";
+  boot();
+});
+
+/* ==================================================================== health */
+
+async function loadHealth() {
+  try {
+    state.health = await api("/health");
+  } catch (err) {
+    state.health = null;
+    renderRig(err);
+    return;
+  }
+  renderRig();
+  if (state.health.config.auth_required && !state.apiKey) openAuth();
+}
+
+/** The diagnostic strip: which models are actually loaded, and what's broken. */
+function renderRig(err) {
+  const rig = $("rig");
+  rig.textContent = "";
+
+  if (err || !state.health) {
+    const box = el("div", "rig-alert");
+    box.innerHTML = `<b>Server unreachable.</b> Start it with
+      <code>uvicorn app.main:app --reload</code>`;
+    rig.appendChild(box);
+    return;
+  }
+
+  const c = state.health.config;
+  const rows = [
+    ["embed", `${c.embedding_model} (${c.embedding_provider})`],
+    ["gen", `${c.llm_model} (${c.llm_provider})`],
+    ["search", c.hybrid_search ? `hybrid · ${c.rerank_strategy}` : `vector · ${c.rerank_strategy}`],
+    ["index", `${state.health.stats.chunks} chunks · ${state.health.stats.vectors} vectors`],
+  ];
+  for (const [k, v] of rows) {
+    const row = el("div", "rig-row");
+    row.appendChild(el("span", "rig-key", k));
+    row.appendChild(el("span", "rig-val", v));
+    rig.appendChild(row);
+  }
+
+  $("tagline").textContent = `${c.llm_model} · cited answers`;
+
+  // Name the broken component and the command that fixes it.
+  const broken = Object.entries(state.health.components).filter(([, v]) => !v.ok);
+  if (broken.length) {
+    const box = el("div", "rig-alert");
+    const [name, info] = broken[0];
+    let fix = "";
+    if (name === "embeddings" || name === "llm") {
+      const model = name === "llm" ? c.llm_model : c.embedding_model;
+      fix = /not found|pull/i.test(info.detail)
+        ? ` Run <code>ollama pull ${esc(model)}</code>`
+        : ` Run <code>ollama serve</code>`;
+    }
+    box.innerHTML = `<b>${esc(name)} unavailable.</b> ${esc(info.detail)}${fix}`;
+    rig.appendChild(box);
+  }
+}
+
+/* ================================================================= documents */
+
+async function loadDocs() {
+  try {
+    const data = await api("/documents?limit=200");
+    state.docs = data.documents;
+  } catch (err) {
+    if (err.code !== "unauthorized") shout(err);
+    return;
+  }
+  renderDocs();
+  schedulePoll();
+}
+
+/** Poll only while something is still being ingested. */
+function schedulePoll() {
+  const working = state.docs.some((d) => d.status === "pending" || d.status === "processing");
+  if (working && !state.poll) {
+    state.poll = setInterval(async () => {
+      await loadDocs();
+      await loadHealth();
+    }, 1400);
+  } else if (!working && state.poll) {
+    clearInterval(state.poll);
+    state.poll = null;
+  }
+}
+
+function statusLine(doc) {
+  if (doc.status === "ready") {
+    const pages = doc.page_count ? `${doc.page_count} pages · ` : "";
+    return `${pages}${doc.chunk_count} chunks · ${fmtBytes(doc.size_bytes)}`;
+  }
+  if (doc.status === "failed") return "failed";
+  if (doc.status === "processing") {
+    const p = doc.progress;
+    if (p && p.total_chunks) return `embedding ${p.embedded_chunks}/${p.total_chunks}`;
+    return p && p.stage ? p.stage : "processing";
+  }
+  return "queued";
+}
+
+function renderDocs() {
+  const list = $("docs");
+  list.textContent = "";
+
+  // In-flight uploads first, so a file you just dropped appears immediately.
+  for (const [tmp, up] of state.uploads) {
+    const li = el("li", "doc locked");
+    li.appendChild(el("span", "tick"));
+    const body = el("div", "doc-body");
+    body.appendChild(el("div", "doc-name", up.name));
+    const meta = el("div", "doc-meta");
+    meta.appendChild(el("span", "dot pending"));
+    meta.appendChild(el("span", null, `uploading ${Math.round(up.pct * 100)}%`));
+    body.appendChild(meta);
+    const bar = el("div", "bar");
+    const fill = el("span");
+    fill.style.width = `${Math.max(4, up.pct * 100)}%`;
+    bar.appendChild(fill);
+    body.appendChild(bar);
+    li.appendChild(body);
+    list.appendChild(li);
+    void tmp;
+  }
+
+  if (!state.docs.length && !state.uploads.size) {
+    list.appendChild(el("li", "empty-note", "Nothing indexed yet."));
+  }
+
+  for (const doc of state.docs) {
+    const ready = doc.status === "ready";
+    const picked = state.scope.has(doc.id);
+    const li = el("li", "doc" + (ready ? "" : " locked") + (picked ? " picked" : ""));
+
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.checked = picked;
+    input.disabled = !ready;
+    input.id = `pick-${doc.id}`;
+    li.appendChild(input);
+    li.appendChild(el("span", "tick"));
+
+    const body = el("div", "doc-body");
+    body.appendChild(el("div", "doc-name", doc.original_name));
+
+    const meta = el("div", "doc-meta");
+    meta.appendChild(el("span", `dot ${doc.status}`));
+    meta.appendChild(el("span", null, statusLine(doc)));
+    body.appendChild(meta);
+
+    if (doc.status === "processing" && doc.progress && doc.progress.total_chunks) {
+      const bar = el("div", "bar");
+      const fill = el("span");
+      fill.style.width = `${doc.progress.percent || 0}%`;
+      bar.appendChild(fill);
+      body.appendChild(bar);
+    }
+
+    if (doc.error) body.appendChild(el("div", "doc-err", doc.error));
+
+    li.appendChild(body);
+
+    const kill = el("button", "kill", "×");
+    kill.type = "button";
+    kill.title = `Delete ${doc.original_name}`;
+    kill.setAttribute("aria-label", `Delete ${doc.original_name}`);
+    kill.addEventListener("click", (e) => { e.stopPropagation(); removeDoc(doc); });
+    li.appendChild(kill);
+
+    if (ready) {
+      li.addEventListener("click", () => {
+        if (state.scope.has(doc.id)) state.scope.delete(doc.id);
+        else state.scope.add(doc.id);
+        renderDocs();
+        renderScope();
+      });
+      li.tabIndex = 0;
+      li.setAttribute("role", "checkbox");
+      li.setAttribute("aria-checked", picked ? "true" : "false");
+      li.addEventListener("keydown", (e) => {
+        if (e.key === " " || e.key === "Enter") { e.preventDefault(); li.click(); }
+      });
+    }
+
+    list.appendChild(li);
+  }
+
+  renderScope();
+}
+
+function renderScope() {
+  // Drop ids that no longer exist or stopped being ready.
+  for (const id of Array.from(state.scope)) {
+    const doc = state.docs.find((d) => d.id === id);
+    if (!doc || doc.status !== "ready") state.scope.delete(id);
+  }
+
+  const ready = state.docs.filter((d) => d.status === "ready");
+  const chip = $("scopeChip");
+  const note = $("scopeNote");
+  const clear = $("clearScope");
+
+  if (!ready.length) {
+    chip.textContent = state.docs.length
+      ? "Waiting for a document to finish processing"
+      : "Add a document to begin";
+    note.hidden = true;
+    clear.hidden = true;
+  } else if (!state.scope.size) {
+    chip.textContent = `Searching all ${ready.length} document${ready.length > 1 ? "s" : ""}`;
+    note.hidden = true;
+    clear.hidden = true;
+  } else {
+    const names = ready.filter((d) => state.scope.has(d.id)).map((d) => d.original_name);
+    chip.textContent = names.length === 1
+      ? `Searching ${names[0]}`
+      : `Searching ${names.length} of ${ready.length} documents`;
+    note.hidden = false;
+    note.textContent = names.join(", ");
+    clear.hidden = false;
+  }
+
+  $("send").disabled = state.busy || !ready.length || !$("q").value.trim();
+}
+
+async function removeDoc(doc) {
+  if (!confirm(`Delete "${doc.original_name}"? Its chunks and vectors go too.`)) return;
+  try {
+    await api(`/documents/${encodeURIComponent(doc.id)}`, { method: "DELETE" });
+    state.scope.delete(doc.id);
+    toast(`Deleted ${doc.original_name}`);
+    await loadDocs();
+    await loadHealth();
+  } catch (err) { shout(err); }
+}
+
+/* ==================================================================== upload */
+
+/* XHR rather than fetch: it reports upload progress, which matters for the
+   50 MB PDFs this thing is meant to handle. */
+function uploadOne(file) {
+  const tmp = uuid();
+  state.uploads.set(tmp, { name: file.name, pct: 0 });
+  renderDocs();
+
+  return new Promise((resolve) => {
+    const form = new FormData();
+    form.append("file", file);
+
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", "/documents/upload");
+    if (state.apiKey) xhr.setRequestHeader("X-API-Key", state.apiKey);
+
+    xhr.upload.addEventListener("progress", (e) => {
+      if (!e.lengthComputable) return;
+      const entry = state.uploads.get(tmp);
+      if (entry) { entry.pct = e.loaded / e.total; renderDocs(); }
+    });
+
+    const done = () => { state.uploads.delete(tmp); renderDocs(); resolve(); };
+
+    xhr.addEventListener("load", () => {
+      let body = null;
+      try { body = JSON.parse(xhr.responseText); } catch (_) { /* ignore */ }
+      if (xhr.status >= 200 && xhr.status < 300) {
+        if (body && body.duplicate) toast(body.message, null, "already indexed");
+        else toast(`${file.name} queued for processing`);
+      } else if (xhr.status === 401) {
+        openAuth();
+      } else {
+        const e = body && body.error ? body.error : {};
+        toast(e.message || `Upload failed (${xhr.status})`, "bad", e.code || "upload failed");
+      }
+      done();
+    });
+
+    xhr.addEventListener("error", () => {
+      toast(`Network error while uploading ${file.name}`, "bad", "upload failed");
+      done();
+    });
+
+    xhr.send(form);
+  });
+}
+
+async function uploadAll(files) {
+  // Sequential: the ingestion queue is bounded anyway, and this keeps the
+  // progress rows honest instead of showing four bars crawling at once.
+  for (const file of files) await uploadOne(file);
+  await loadDocs();
+  await loadHealth();
+}
+
+$("pick").addEventListener("click", () => $("file").click());
+$("file").addEventListener("change", (e) => {
+  const files = Array.from(e.target.files || []);
+  e.target.value = "";
+  if (files.length) uploadAll(files);
+});
+
+const drop = $("drop");
+["dragenter", "dragover"].forEach((evt) =>
+  drop.addEventListener(evt, (e) => { e.preventDefault(); drop.classList.add("hot"); }));
+["dragleave", "drop"].forEach((evt) =>
+  drop.addEventListener(evt, (e) => { e.preventDefault(); drop.classList.remove("hot"); }));
+drop.addEventListener("drop", (e) => {
+  const files = Array.from(e.dataTransfer.files || []);
+  if (files.length) uploadAll(files);
+});
+// Dropping anywhere else shouldn't navigate away from the app.
+window.addEventListener("dragover", (e) => e.preventDefault());
+window.addEventListener("drop", (e) => e.preventDefault());
+
+/* ================================================================== sessions */
+
+async function loadSessions() {
+  try {
+    const data = await api("/sessions?limit=30");
+    state.sessions = data.sessions;
+  } catch (err) {
+    if (err.code !== "unauthorized") shout(err);
+    return;
+  }
+  renderSessions();
+}
+
+function renderSessions() {
+  const list = $("sessions");
+  list.textContent = "";
+
+  if (!state.sessions.length) {
+    list.appendChild(el("li", "empty-note", "No chats yet."));
+    return;
+  }
+
+  for (const s of state.sessions) {
+    const li = document.createElement("li");
+    const btn = el("button", "session" + (s.id === state.sessionId ? " live" : ""));
+    btn.type = "button";
+    btn.appendChild(el("span", "session-title", s.title || "Untitled chat"));
+    btn.appendChild(el("span", "session-count num", String(s.exchange_count)));
+    btn.addEventListener("click", () => openSession(s.id));
+    li.appendChild(btn);
+    list.appendChild(li);
+  }
+}
+
+async function openSession(id) {
+  try {
+    const data = await api(`/sessions/${encodeURIComponent(id)}?limit=100`);
+    state.sessionId = id;
+    $("thread").textContent = "";
+    // API returns newest first; a transcript reads oldest first.
+    for (const entry of data.history.slice().reverse()) {
+      renderTurn({
+        question: entry.question,
+        answer: entry.answer,
+        grounded: entry.grounded,
+        sources: entry.sources || [],
+        retrieved: [],
+        latency_ms: entry.latency_ms || 0,
+        diagnostics: {
+          llm_model: entry.llm_model,
+          embedding_model: entry.embedding_model,
+        },
+        documentIds: entry.document_ids || [],
+      });
+    }
+    if (!data.history.length) {
+      $("thread").appendChild(makeZeroNote("This chat is empty. Ask something."));
+    }
+    renderSessions();
+    closeRail();
+    scrollThread();
+  } catch (err) { shout(err); }
+}
+
+function makeZeroNote(text) {
+  const wrap = el("div", "wrap");
+  wrap.appendChild(el("p", "empty-note", text));
+  return wrap;
+}
+
+$("newChat").addEventListener("click", () => {
+  state.sessionId = null;
+  $("thread").textContent = "";
+  const wrap = el("div", "wrap zero");
+  const lead = el("p", "zero-lead");
+  lead.innerHTML = "New chat. Ask a question and the answer arrives <mark>marked</mark> with its sources.";
+  wrap.appendChild(lead);
+  $("thread").appendChild(wrap);
+  renderSessions();
+  $("q").focus();
+  closeRail();
+});
+
+/* =================================================================== answers */
+
+/* Minimal inline formatting. Escaping happens first, so the tags introduced
+   below are the only markup that can reach the DOM. */
+function renderProse(text) {
+  const blocks = String(text || "").split(/\n{2,}/);
+  let html = "";
+
+  for (const block of blocks) {
+    const lines = block.split("\n");
+    const bulleted = lines.every((l) => /^\s*[-*•]\s+/.test(l));
+    if (bulleted && lines.length) {
+      html += "<ul>" + lines.map((l) =>
+        `<li>${inline(l.replace(/^\s*[-*•]\s+/, ""))}</li>`).join("") + "</ul>";
+    } else {
+      html += `<p>${inline(block).replace(/\n/g, "<br>")}</p>`;
+    }
+  }
+  return html;
+}
+
+function inline(raw) {
+  let out = esc(raw);
+  out = out.replace(/`([^`]+)`/g, "<code>$1</code>");
+  out = out.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  // Citation markers become clickable highlighter strokes. [2, 4] -> two chips.
+  out = out.replace(/\[(\d+(?:\s*,\s*\d+)*)\]/g, (m, group) =>
+    group.split(",").map((n) => {
+      const num = n.trim();
+      return `<button type="button" class="cite" data-n="${num}" ` +
+             `title="Show source ${num}">${num}</button>`;
+    }).join(""));
+  return out;
+}
+
+function traceLine(result) {
+  const d = result.diagnostics || {};
+  const bits = [];
+  if (d.strategy) {
+    const parts = [];
+    if (d.vector_hits != null) parts.push(`${d.vector_hits} vector`);
+    if (d.keyword_hits) parts.push(`${d.keyword_hits} keyword`);
+    bits.push(`<b>${esc(d.strategy)}</b>${parts.length ? " " + parts.join(" + ") : ""}`);
+  }
+  if (d.candidates_considered != null) bits.push(`${d.candidates_considered} candidates`);
+  if (d.rerank_strategy && d.rerank_strategy !== "none") bits.push(esc(d.rerank_strategy));
+  if (d.chunks_in_context != null) bits.push(`${d.chunks_in_context} in context`);
+  if (d.filtered_out_by_distance) bits.push(`${d.filtered_out_by_distance} too distant`);
+  if (d.llm_model) bits.push(esc(d.llm_model));
+  if (result.latency_ms) bits.push(`${result.latency_ms} ms`);
+  return bits.map((b) => `<span>${b}</span>`).join('<span aria-hidden="true">·</span>');
+}
+
+function evidenceCard(source, index) {
+  const li = el("li", "ev");
+  li.dataset.n = String(index);
+
+  const top = el("button", "ev-top");
+  top.type = "button";
+  top.setAttribute("aria-expanded", "false");
+  top.appendChild(el("span", "ev-n", String(index)));
+
+  const where = el("div", "ev-where");
+  where.appendChild(el("div", "ev-doc",
+    `${source.document_name} · ${source.page_label || ""}`.replace(/ · $/, "")));
+
+  const stats = [];
+  if (source.similarity != null) stats.push(`sim ${source.similarity.toFixed(3)}`);
+  if (source.keyword_score) stats.push(`bm25 ${source.keyword_score.toFixed(2)}`);
+  if (source.rerank_score != null) stats.push(`rerank ${source.rerank_score.toFixed(3)}`);
+  stats.push(`chunk ${source.chunk_index}`);
+  where.appendChild(el("div", "ev-stats num", stats.join(" · ")));
+  top.appendChild(where);
+
+  top.appendChild(el("span", "ev-chev", "show"));
+  li.appendChild(top);
+  li.appendChild(el("div", "ev-text", source.text));
+
+  top.addEventListener("click", () => {
+    const open = li.classList.toggle("open");
+    top.setAttribute("aria-expanded", open ? "true" : "false");
+    top.querySelector(".ev-chev").textContent = open ? "hide" : "show";
+  });
+
+  return li;
+}
+
+/** Render one full exchange. Returns the turn node. */
+function renderTurn(result) {
+  const turn = el("div", "turn");
+  const wrap = el("div", "wrap");
+
+  const ask = el("div", "ask");
+  ask.appendChild(el("span", "ask-mark", "Q"));
+  const askBody = el("div");
+  askBody.appendChild(el("div", "ask-text", result.question));
+  const scoped = result.documentIds && result.documentIds.length;
+  if (scoped) {
+    const names = result.documentIds.map((id) => {
+      const doc = state.docs.find((d) => d.id === id);
+      return doc ? doc.original_name : id.slice(0, 8);
+    });
+    askBody.appendChild(el("p", "ask-scope", `scoped to ${names.join(", ")}`));
+  }
+  ask.appendChild(askBody);
+  wrap.appendChild(ask);
+
+  const reply = el("div", "reply");
+  const prose = el("div", "prose");
+  prose.innerHTML = renderProse(result.answer);
+  reply.appendChild(prose);
+
+  if (!result.grounded) {
+    const flag = el("div", "flag");
+    flag.textContent = result.sources.length
+      ? "Not grounded: the model didn't cite a source, so treat this as unverified."
+      : "No supporting passage cleared the relevance threshold.";
+    reply.appendChild(flag);
+  }
+
+  const trace = el("div", "trace");
+  trace.innerHTML = traceLine(result);
+  if (trace.textContent.trim()) reply.appendChild(trace);
+
+  // Cited sources, then anything retrieved but not cited, de-duplicated.
+  const cited = result.sources || [];
+  const citedIds = new Set(cited.map((s) => s.chunk_id));
+  const extra = (result.retrieved || []).filter((r) => !citedIds.has(r.chunk_id));
+
+  if (cited.length) {
+    const head = el("div", "evidence-head");
+    head.appendChild(el("span", "eyebrow", `Sources (${cited.length})`));
+    head.appendChild(el("div", "evidence-rule"));
+    reply.appendChild(head);
+
+    const list = el("ul", "ev-list");
+    cited.forEach((s, i) => list.appendChild(evidenceCard(s, i + 1)));
+    reply.appendChild(list);
+  }
+
+  if (extra.length) {
+    const toggle = el("button", "more",
+      `${extra.length} more passage${extra.length > 1 ? "s" : ""} retrieved, not cited`);
+    toggle.type = "button";
+    const list = el("ul", "ev-list");
+    list.hidden = true;
+    extra.forEach((s, i) => list.appendChild(evidenceCard(s, cited.length + i + 1)));
+    toggle.addEventListener("click", () => {
+      list.hidden = !list.hidden;
+      toggle.textContent = list.hidden
+        ? `${extra.length} more passage${extra.length > 1 ? "s" : ""} retrieved, not cited`
+        : "Hide uncited passages";
+    });
+    reply.appendChild(toggle);
+    reply.appendChild(list);
+  }
+
+  // A citation marker opens and lights its passage: the whole point of the tool.
+  prose.addEventListener("click", (e) => {
+    const chip = e.target.closest(".cite");
+    if (!chip) return;
+    const card = reply.querySelector(`.ev[data-n="${chip.dataset.n}"]`);
+    if (!card) { toast(`Source ${chip.dataset.n} isn't in this answer's list`); return; }
+    const hidden = card.parentElement.hidden;
+    if (hidden) card.parentElement.hidden = false;
+    if (!card.classList.contains("open")) card.querySelector(".ev-top").click();
+    reply.querySelectorAll(".ev.lit").forEach((n) => n.classList.remove("lit"));
+    // Re-add on the next frame so the wash animation restarts on repeat clicks.
+    requestAnimationFrame(() => card.classList.add("lit"));
+    card.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  });
+
+  wrap.appendChild(reply);
+  turn.appendChild(wrap);
+  $("thread").appendChild(turn);
+  return turn;
+}
+
+function scrollThread() {
+  const thread = $("thread");
+  thread.scrollTop = thread.scrollHeight;
+}
+
+/* ======================================================================= ask */
+
+async function ask(question) {
+  const zero = $("zero");
+  if (zero) zero.remove();
+  const stale = $("thread").querySelector(".empty-note");
+  if (stale) stale.closest(".wrap").remove();
+
+  if (!state.sessionId) state.sessionId = uuid();
+  const documentIds = Array.from(state.scope);
+
+  // Provisional turn: question rendered immediately, answer streams in.
+  const turn = el("div", "turn");
+  const wrap = el("div", "wrap");
+  const ask = el("div", "ask");
+  ask.appendChild(el("span", "ask-mark", "Q"));
+  const askBody = el("div");
+  askBody.appendChild(el("div", "ask-text", question));
+  ask.appendChild(askBody);
+  wrap.appendChild(ask);
+  const reply = el("div", "reply");
+  const prose = el("div", "prose thin");
+  prose.textContent = "Retrieving…";
+  const caret = el("span", "caret");
+  prose.appendChild(caret);
+  reply.appendChild(prose);
+  wrap.appendChild(reply);
+  turn.appendChild(wrap);
+  $("thread").appendChild(turn);
+  scrollThread();
+
+  setBusy(true);
+  try {
+    const result = await streamAnswer({ question, documentIds, prose, caret });
+    turn.remove();
+    result.question = question;
+    result.documentIds = documentIds;
+    renderTurn(result);
+    scrollThread();
+    await loadSessions();
+  } catch (err) {
+    turn.remove();
+    shout(err);
+    // Put the question back so it isn't lost to a transient failure.
+    $("q").value = question;
+    autosize();
+  } finally {
+    setBusy(false);
+  }
+}
+
+/**
+ * Pull complete SSE frames out of a buffer.
+ *
+ * Network chunks don't align with frame boundaries, so this returns the parsed
+ * events plus whatever partial frame is left over to prepend to the next chunk.
+ * Kept pure and separate precisely so it can be tested against a stream chopped
+ * at hostile offsets.
+ */
+function parseFrames(buffer) {
+  const events = [];
+  let rest = buffer;
+  let cut;
+
+  while ((cut = rest.indexOf("\n\n")) !== -1) {
+    const frame = rest.slice(0, cut);
+    rest = rest.slice(cut + 2);
+
+    const payload = frame
+      .split("\n")
+      .filter((l) => l.startsWith("data:"))
+      .map((l) => l.slice(5).trim())
+      .join("\n");
+
+    if (!payload || payload === "[DONE]") continue;
+    try {
+      events.push(JSON.parse(payload));
+    } catch (_) {
+      // A frame we can't parse is a server bug, not a reason to kill the stream.
+    }
+  }
+  return { events: events, rest: rest };
+}
+
+/**
+ * POST /query with stream:true and read the SSE frames by hand.
+ *
+ * EventSource can't issue a POST, so the stream is parsed off the fetch body.
+ * Deltas render as they arrive; the `done` event is authoritative because
+ * citations can only be resolved once the full text exists.
+ */
+async function streamAnswer({ question, documentIds, prose, caret }) {
+  const res = await fetch("/query", {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({
+      question,
+      document_ids: documentIds.length ? documentIds : null,
+      session_id: state.sessionId,
+      stream: true,
+    }),
+  }).catch(() => {
+    throw new ApiError("network_error", "Can't reach the server.", 0, null);
+  });
+
+  if (res.status === 401) { openAuth(); throw await readError(res); }
+  if (!res.ok) throw await readError(res);
+  if (!res.body) throw new ApiError("stream_error", "This browser can't read the stream.", 0, null);
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let text = "";
+  let final = null;
+  let failure = null;
+
+  const paint = () => {
+    prose.classList.remove("thin");
+    prose.textContent = text;
+    prose.appendChild(caret);
+  };
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    const parsed = parseFrames(buffer);
+    buffer = parsed.rest;
+
+    for (const event of parsed.events) {
+      if (event.type === "delta") {
+        text += event.text || "";
+        paint();
+        scrollThread();
+      } else if (event.type === "done") {
+        final = event;
+      } else if (event.type === "error") {
+        failure = new ApiError(event.code || "stream_error",
+          event.message || "The answer stream failed.", 0, null);
+      } else if (event.type === "meta") {
+        // Retrieval finished; clear the placeholder before tokens land.
+        prose.classList.remove("thin");
+        prose.textContent = "";
+        prose.appendChild(caret);
+      }
+    }
+  }
+
+  if (failure) throw failure;
+  if (!final) {
+    // Stream ended without a done frame -- salvage whatever text arrived.
+    if (!text.trim()) throw new ApiError("stream_error", "The answer stream ended early.", 0, null);
+    return { answer: text, grounded: false, sources: [], retrieved: [], diagnostics: {}, latency_ms: 0 };
+  }
+  return final;
+}
+
+function setBusy(on) {
+  state.busy = on;
+  const send = $("send");
+  send.disabled = on || !$("q").value.trim() || !state.docs.some((d) => d.status === "ready");
+  send.firstChild.textContent = on ? "Asking " : "Ask ";
+  $("q").disabled = on;
+}
+
+/* ================================================================= composer */
+
+const box = $("q");
+
+function autosize() {
+  box.style.height = "auto";
+  box.style.height = `${Math.min(box.scrollHeight, 168)}px`;
+}
+
+box.addEventListener("input", () => { autosize(); renderScope(); });
+box.addEventListener("focus", () => $("field").classList.add("active"));
+box.addEventListener("blur", () => $("field").classList.remove("active"));
+
+box.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    $("field").requestSubmit();
+  }
+});
+
+$("field").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const question = box.value.trim();
+  if (!question || state.busy) return;
+  if (!state.docs.some((d) => d.status === "ready")) {
+    toast("Nothing is indexed yet. Add a document first.", "bad", "no documents");
+    return;
+  }
+  box.value = "";
+  autosize();
+  renderScope();
+  ask(question);
+});
+
+$("clearScope").addEventListener("click", () => {
+  state.scope.clear();
+  renderDocs();
+});
+
+/* ================================================================== chrome */
+
+const openRail = () => { $("rail").classList.add("open"); $("scrim").classList.add("on"); };
+const closeRail = () => { $("rail").classList.remove("open"); $("scrim").classList.remove("on"); };
+
+$("railToggle").addEventListener("click", openRail);
+$("scrim").addEventListener("click", closeRail);
+
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") {
+    closeRail();
+    $("authVeil").classList.remove("on");
+  }
+  // Jump to the composer from anywhere.
+  if ((e.metaKey || e.ctrlKey) && e.key === "k") { e.preventDefault(); box.focus(); }
+});
+
+/* ===================================================================== boot */
+
+async function boot() {
+  await loadHealth();
+  if (state.health && state.health.config.auth_required && !state.apiKey) return;
+  await Promise.all([loadDocs(), loadSessions()]);
+  box.focus();
+}
+
+boot();
+</script>
+<script>
+/* Scroll reveal, kept deliberately separate from the app logic above: it
+   watches the thread for new nodes rather than hooking renderTurn, so it can
+   never change how an exchange is built.
+
+   Three rules keep this out of the user's way:
+
+   - The in-flight turn is exempt, identified by `.prose.thin` -- the
+     "Retrieving..." placeholder. Fading in the thing you are waiting for would
+     be motion working against you.
+   - Passages in a collapsed list are exempt too. Clicking a citation unhides
+     that list and scrolls to the card, and a card that is still waiting to
+     animate would read as a click that did nothing.
+   - Evidence cards stagger, so a set of sources reads as being laid out in
+     order rather than landing as one block. */
+(function () {
+  "use strict";
+
+  var thread = document.getElementById("thread");
+  if (!thread) return;
+  if (!("IntersectionObserver" in window) || !("MutationObserver" in window)) return;
+  if (window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+
+  var observerWorks = false;
+  var broken = false;
+  var armed = [];
+
+  var io = new IntersectionObserver(function (entries) {
+    // Called even when nothing intersects, which is the signal we want: it
+    // proves the observer is running rather than that something is on screen.
+    observerWorks = true;
+    for (var i = 0; i < entries.length; i++) {
+      if (!entries[i].isIntersecting) continue;
+      io.unobserve(entries[i].target);
+      show(entries[i].target);
+    }
+  }, { root: thread, rootMargin: "0px 0px -4% 0px", threshold: 0.01 });
+
+  function show(node) {
+    var delay = Number(node.getAttribute("data-reveal-delay") || 0);
+    if (delay) node.style.transitionDelay = delay + "ms";
+    node.classList.add("in");
+  }
+
+  function arm(node, delay) {
+    if (broken || node.getAttribute("data-reveal")) return;
+    node.setAttribute("data-reveal", "1");
+    if (delay) node.setAttribute("data-reveal-delay", String(delay));
+    node.classList.add("reveal");
+    armed.push(node);
+    io.observe(node);
+  }
+
+  /* If the observer has never run, the effect is broken rather than merely
+     waiting, so give up and show everything. Note this is a single global
+     check, not a timeout per node: a per-node timer would also fire for nodes
+     that are legitimately still below the fold, which would reveal the whole
+     transcript at once and defeat the point. */
+  setTimeout(function () {
+    if (observerWorks) return;
+    broken = true;
+    io.disconnect();
+    for (var i = 0; i < armed.length; i++) show(armed[i]);
+  }, 1600);
+
+  function collapsed(node) {
+    var list = node.closest ? node.closest(".ev-list") : null;
+    return !!(list && list.hidden);
+  }
+
+  new MutationObserver(function (records) {
+    for (var r = 0; r < records.length; r++) {
+      var added = records[r].addedNodes;
+      for (var n = 0; n < added.length; n++) {
+        var node = added[n];
+        if (node.nodeType !== 1 || !node.classList.contains("turn")) continue;
+        if (node.querySelector(".prose.thin")) continue;
+        arm(node, 0);
+        var cards = node.querySelectorAll(".ev");
+        var shown = 0;
+        for (var c = 0; c < cards.length; c++) {
+          if (collapsed(cards[c])) continue;
+          arm(cards[c], 70 + shown * 55);
+          shown++;
+        }
+      }
+    }
+  }).observe(thread, { childList: true });
+})();
+</script>
+</body>
+</html>

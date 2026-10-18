@@ -1,0 +1,59 @@
+# --- Secrets and local config ---------------------------------------------
+# .env holds API keys and machine-specific paths; .env.example is the template
+# that belongs in version control.
+.env
+.env.*
+!.env.example
+
+# --- Runtime data ----------------------------------------------------------
+# Uploaded files, the Chroma index, and the SQLite metadata database. All of it
+# is regenerable by re-ingesting, and none of it should be shared.
+data/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite3
+
+# --- Python ----------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# --- Tests and tooling -----------------------------------------------------
+.pytest_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+.tox/
+
+# --- Node (only used by tests/frontend.test.js, which needs no packages) ----
+node_modules/
+
+# --- Editors and OS --------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# --- Model caches ----------------------------------------------------------
+# sentence-transformers/HuggingFace downloads when RERANK_STRATEGY=cross_encoder
+.cache/
+models/

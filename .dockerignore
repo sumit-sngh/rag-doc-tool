@@ -1,0 +1,78 @@
+# What must never enter the image.
+#
+# Without this file, `docker build` sends the entire project directory to the
+# daemon -- including data/, which on a working install holds every uploaded
+# document, the Chroma index, and the SQLite database. That would bake one
+# machine's private library into a shareable image and, on a public deploy,
+# serve it to strangers. It also masks the volume mount: files baked at /app/data
+# are shadowed at runtime, so the library appears to vanish rather than fail
+# loudly.
+
+# --- Runtime state (the important one) ------------------------------------- #
+data/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite3
+
+# --- Secrets --------------------------------------------------------------- #
+# .env is read from the environment at runtime, never copied in. Baking it would
+# put an API key inside a layer that anyone who pulls the image can read.
+.env
+.env.*
+!.env.example
+
+# --- Virtualenvs ----------------------------------------------------------- #
+# A host .venv is built for the host's OS and CPU. Copying a macOS venv into a
+# linux/amd64 image produces binaries that cannot load at all.
+.venv/
+venv/
+env/
+ENV/
+
+# --- Python bytecode ------------------------------------------------------- #
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# --- Tests and tooling ----------------------------------------------------- #
+# Not shipped: the suite runs in CI and locally, not in the deployed container.
+tests/
+scripts/
+.pytest_cache/
+pytest.ini
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+.tox/
+
+# --- Git and CI ------------------------------------------------------------ #
+.git/
+.gitignore
+.github/
+
+# --- Docs and deploy config ------------------------------------------------ #
+# Read by humans and by flyctl on the host, never by the running app.
+README.md
+DEPLOY.md
+Makefile
+Dockerfile
+.dockerignore
+docker-compose*.yml
+fly.toml
+
+# --- Editors, OS, caches --------------------------------------------------- #
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+node_modules/
+.cache/
+models/
